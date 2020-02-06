@@ -1,4 +1,4 @@
 # Julia's Website
 
-Check out all my cool data science projects!
+Here are all my cool data science projects!
 
