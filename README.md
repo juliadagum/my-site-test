@@ -1,2 +1,4 @@
-# my-site-test
-Testing a webpage with gh-pages
+# Julia's Website
+
+Check out all my cool data science projects!
+
