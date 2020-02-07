@@ -6,7 +6,170 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
+## Attach packages 
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(here)
+library(paletteer)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(forecast)
+library(sf)
+library(tmap)
+library(mapview)
+```
+
+## Monthly US energy consumption (renewables)
+
+```{r}
+us_renew <- read_csv(here("data", "renewables_cons_prod.csv")) %>% 
+  clean_names()
+```
+
+- make description all lowercase
+- only keep observations where the description variable contains the string pattern "consumption"
+- remove any observations where the description variable contains the word "total"
+
+```{r}
+renew_clean <- us_renew %>% 
+  mutate(description = str_to_lower(description)) %>% 
+  filter(str_detect(description, pattern = "consumption")) %>% 
+  filter(!str_detect(description, pattern = "total"))
+```
+
+### Convert 'yyyymm' column to a date
+
+```{r}
+renew_date <- renew_clean %>% 
+  mutate(yr_mo_day = lubridate::parse_date_time(yyyymm, "ym")) %>% 
+  mutate(month_sep = yearmonth(yr_mo_day)) %>% 
+  mutate(value = as.numeric(value)) %>% 
+  drop_na(month_sep, value)
+
+# Make a version where I have month and year in separate columns
+
+renew_parsed <- renew_date %>% 
+  mutate(month = month(yr_mo_day, label = TRUE)) %>% 
+  mutate(year = year(yr_mo_day))
+```
+
+### Look at it: 
+
+```{r}
+renew_gg <- ggplot(data = renew_date,
+                   aes(x = month_sep, 
+                       y = value, 
+                       group = description)) +
+  geom_line(aes(color = description))
+
+renew_gg
+```
+
+Updating my colors with paletteer palettes: 
+
+```{r}
+renew_gg +
+  scale_color_paletteer_d("DresdenColor::bloodrites")
+```
+
+### Coerce our renew_parsed to a tsibble (time-series enabled data frame)
+
+```{r}
+renew_ts <- as_tsibble(renew_parsed, key = description, index = month_sep)
+```
+
+Let's look at our ts data in a couple different ways: 
+```{r}
+renew_ts %>% autoplot(value)
+
+# this works because the key was already specified as description above
+
+renew_ts %>% gg_subseries(value)
+
+# renew_ts %>% gg_season(value) - doesn't always work
+
+ggplot(data = renew_parsed, 
+       aes(x = month, 
+           y = value, 
+           group = year)) +
+  geom_line(aes(color = year)) +
+  facet_wrap(~description, 
+             ncol = 1, 
+             scales = "free", 
+             strip.position = "right") 
+```
+
+### Just look at the hydroelectric energy consumption 
+```{r}
+hydro_ts <- renew_ts %>% 
+  filter(description == "hydroelectric power consumption")
+
+hydro_ts %>% autoplot(value)
+hydro_ts %>% gg_subseries(value)
+
+ggplot(hydro_ts, aes(x = month, y = value, group = year)) +
+  geom_line(aes(color = year))
+```
+
+### What if I want the quarterly average consumption for hydro? 
+
+```{r}
+hydro_quarterly <- hydro_ts %>% 
+  index_by(year_qu = ~(yearquarter(.))) %>% 
+  summarize(avg_consumption = mean(value))
+
+head(hydro_quarterly)
+```
+
+### Decompose hydro_ts
+
+```{r}
+dcmp <- hydro_ts %>% 
+  model(STL(value ~ season(window = 5)))
+
+# window specifies moving avg window
+# value as a function of season
+
+components(dcmp) %>% autoplot()
+
+# residual component is usually less than 10% of total range of values (e.g. here it ranges from about 150 - 300 trillion BTUs, errors about 20)
+```
+
+```{r}
+hist(components(dcmp)$remainder)
+```
+
+Now let's look at the ACF: 
+```{r}
+hydro_ts %>% 
+  ACF(value) %>% 
+  autoplot()
+```
+# DANGER DANGER
+
+Make sure to do research on this, don't just do forecasting without a lot of background info
+
+```{r}
+hydro_model <- hydro_ts %>% 
+  model(
+    ARIMA(value)
+  ) %>% 
+  fabletools::forecast(h = "4 years")
+
+hydro_model %>% autoplot(filter(hydro_ts, year(month_sep) > 2010))
+```
+
+### World map
+
+```{r}
+world <- read_sf(dsn = here("data", "TM_WORLD_BORDERS_SIMPL-0.3-1"), layer = "TM_WORLD_BORDERS_SIMPL-0.3")
+```
 
